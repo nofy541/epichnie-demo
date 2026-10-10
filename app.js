@@ -120,6 +120,7 @@ function setTotal(v, instant) {
   if (!MOTION || instant) { shownTotal = v; el.textContent = rub(v); return; }
   const o = { v: shownTotal };
   totalTween = gsap.to(o, { v, duration: 0.9, ease: 'power3.out', onUpdate() { shownTotal = o.v; el.textContent = rub(o.v); } });
+  gsap.fromTo(el, { scale: 1.12 }, { scale: 1, duration: 0.9, ease: 'elastic.out(1,.45)', overwrite: 'auto' });
 }
 
 function update(instant) {
@@ -217,8 +218,22 @@ const chart = (function buildChart() {
     g.append(c, t);
     return c;
   });
-  return { line, dots };
+  const head = document.createElementNS(NS, 'circle');
+  head.setAttribute('id', 'chHead'); head.setAttribute('r', '8');
+  g.parentNode.appendChild(head);
+  return { line, dots, head };
 })();
+
+// положение «головы» = конец нарисованной части линии (читаем из strokeDashoffset)
+function syncHead() {
+  if (!chart) return;
+  const len = chart.line.getTotalLength();
+  const off = parseFloat(chart.line.style.strokeDashoffset);
+  if (isNaN(off) || off <= 0.5 || off >= len - 0.5) { chart.head.classList.remove('show'); return; }
+  const p = chart.line.getPointAtLength(len - off);
+  chart.head.setAttribute('cx', p.x); chart.head.setAttribute('cy', p.y);
+  chart.head.classList.add('show');
+}
 
 // ───────────── меню (мобильное) ─────────────
 const burger = $('#burger'), menu = $('#menu');
@@ -328,9 +343,14 @@ function initMotion() {
       .to('.hero-meta > *, .lead, .hero-cta > *, .ring-badge', { y: 0, opacity: 1, duration: 1, stagger: 0.09, ease: 'power3.out' }, 0.5)
       .to('.ticker', { yPercent: 0, duration: 1.2 }, 0.7)
       .to('.hdr > *', { y: 0, opacity: 1, duration: 1, stagger: 0.1, clearProps: 'transform,opacity' }, 0.6);
+    // «вспышка»: волна света пробегает по буквам, когда всё встало на места
+    const glowFrom = (i, t) => (t.parentElement.classList.contains('it') ? '0 0 .5em rgba(255,138,61,.45)' : '0 0 0em rgba(255,200,140,0)');
+    const glowTo = (i, t) => (t.parentElement.classList.contains('it') ? '0 0 .65em rgba(255,214,150,1)' : '0 0 .34em rgba(255,214,170,.9)');
+    tl.fromTo(chars, { textShadow: glowFrom }, { textShadow: glowTo, duration: 0.45, stagger: 0.065, yoyo: true, repeat: 1, ease: 'sine.inOut', clearProps: 'textShadow' }, 1.35);
+    tl.add(() => { heroReady = true; }, 1.9);
     lenis.start();
   }
-
+  let heroReady = false;
 
   (function loader() {
     const ld = $('#loader'), num = $('#ldNum'), orb = $('.ld-orb'), o = { v: 0 };
@@ -352,13 +372,32 @@ function initMotion() {
   const hero = $('.hero');
   gsap.to('.hero-in', { yPercent: -7, scale: 0.95, opacity: 0.3, ease: 'none', scrollTrigger: { trigger: '.scan', start: 'top bottom', end: 'top top', scrub: true } });
   if (FINE) {
-    let raf = 0, px = 0, py = 0;
+    let raf = 0, px = 0, py = 0, cx = 0, cy = 0, waveOn = false;
+    const mega = $('.mega'), fsz = () => parseFloat(getComputedStyle(mega).fontSize);
+    const cq = chars.map((c) => ({ y: gsap.quickTo(c, 'y', { duration: 0.55, ease: 'power3' }), r: gsap.quickTo(c, 'rotation', { duration: 0.7, ease: 'power3' }), sx: gsap.quickTo(c, 'scaleX', { duration: 0.55, ease: 'power3' }), sy: gsap.quickTo(c, 'scaleY', { duration: 0.55, ease: 'power3' }) }));
+    const pq = pills.map((p) => ({ x: gsap.quickTo(p, 'x', { duration: 1.1, ease: 'power3' }), y: gsap.quickTo(p, 'y', { duration: 1.1, ease: 'power3' }) }));
+    const wave = () => {
+      if (!heroReady) return;
+      const f = fsz(), sg = f * 0.85, mr = mega.getBoundingClientRect();
+      const inside = cx > mr.left - 60 && cx < mr.right + 60 && cy > mr.top - 60 && cy < mr.bottom + 60;
+      if (!inside && !waveOn) return;
+      waveOn = inside;
+      chars.forEach((c, i) => {
+        if (!inside) { cq[i].y(0); cq[i].r(0); cq[i].sx(1); cq[i].sy(1); return; }
+        const r = c.getBoundingClientRect(), dx = cx - (r.left + r.width / 2), dy = (cy - (r.top + r.height / 2)) * 0.7;
+        const k = Math.exp(-(dx * dx + dy * dy) / (2 * sg * sg));
+        cq[i].y(-k * f * 0.07); cq[i].r(clamp(dx / sg, -1, 1) * k * -5); cq[i].sx(1 + k * 0.05); cq[i].sy(1 + k * 0.05);
+      });
+    };
+    hero.addEventListener('pointerleave', () => { cx = cy = -9999; waveOn = true; wave(); waveOn = false; });
     const blobs = $$('.mesh i').map((b, i) => ({ x: gsap.quickTo(b, 'x', { duration: 1.6, ease: 'power3' }), y: gsap.quickTo(b, 'y', { duration: 1.6, ease: 'power3' }), k: [-.045, .06, -.03][i] }));
     hero.addEventListener('pointermove', (e) => {
-      const r = hero.getBoundingClientRect(); px = e.clientX - r.left; py = e.clientY - r.top;
+      const r = hero.getBoundingClientRect(); px = e.clientX - r.left; py = e.clientY - r.top; cx = e.clientX; cy = e.clientY;
       if (!raf) raf = requestAnimationFrame(() => {
         raf = 0; hero.style.setProperty('--mx', px + 'px'); hero.style.setProperty('--my', py + 'px');
         blobs.forEach((b) => { b.x((px - r.width / 2) * b.k * 6); b.y((py - r.height / 2) * b.k * 6); });
+        pq.forEach((p, i) => { p.x((px - r.width / 2) * (i ? -0.035 : 0.035)); p.y((py - r.height / 2) * (i ? 0.03 : -0.03)); });
+        wave();
       });
     });
   }
@@ -387,7 +426,20 @@ function initMotion() {
       gsap.from(words, { yPercent: 118, rotate: 3, duration: 1.3, ease: 'expo.out', stagger: 0.07, scrollTrigger: { trigger: el, start: 'top 86%', once: true } });
     });
   }
+  // плитки bento влетают каждая со своей стороны
+  {
+    const k = innerWidth < 900 ? 0.3 : 1;
+    const from = { 't-magic': { x: -110, rotate: -2.5 }, 't-nm': { y: -70, rotate: 1.5 }, 't-cool': { scale: 0.82, y: 40 }, 't-zero': { x: 90, rotate: 3.5 }, 't-tyrion': { y: 110, rotate: -2 }, 't-silk': { x: 130, rotate: 1.2 } };
+    $$('.bento .tile').forEach((t) => {
+      t.removeAttribute('data-reveal');
+      const key = Object.keys(from).find((c) => t.classList.contains(c)), f = from[key] || { y: 60 };
+      gsap.from(t, { ...f, x: (f.x || 0) * k, opacity: 0, duration: 1.7, ease: 'expo.out', scrollTrigger: { trigger: t, start: 'top 90%', once: true } });
+    });
+  }
   reveals();
+
+  // линия у подписи секции «прорисовывается»
+  $$('.label').forEach((el) => gsap.fromTo(el, { '--lw': 0 }, { '--lw': 1, duration: 1.6, ease: 'expo.out', scrollTrigger: { trigger: el, start: 'top 92%', once: true } }));
 
   // ── манифест: слова «проявляются» вместе со скроллом ──
   const man = $('[data-scrub]');
@@ -420,13 +472,16 @@ function initMotion() {
   // SCAN: рамка раскрывается, лазер «проходит» по кадру и проявляет цвет
   mm.add({ desk: '(min-width: 900px)', mob: '(max-width: 899px)' }, (ctx) => {
     const { mob } = ctx.conditions;
+    const scanP = { v: 0 }, scanNum = $('#scanPct');
     const tl = gsap.timeline({ scrollTrigger: { trigger: '#scan', start: 'top top', end: 'bottom bottom', scrub: 0.7 } });
     tl.fromTo('.scan-frame', { clipPath: mob ? 'inset(0% 0% 0% 0% round 28px)' : 'inset(16% 14% 16% 14% round 48px)' }, { clipPath: 'inset(0% 0% 0% 0% round 0px)', ease: 'power2.inOut', duration: mob ? 0.01 : 0.28 })
       .fromTo('.scan-tag', { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.12, stagger: 0.04 }, '<0.1')
-      .set('.beam', { opacity: 1 })
+      .set('.beam, .scan-read, .scan-grid', { opacity: 1 })
       .fromTo('.scan-color', { clipPath: 'inset(0% 0% 100% 0%)' }, { clipPath: 'inset(0% 0% 0% 0%)', ease: 'none', duration: 0.6 }, '>0.02')
-      .fromTo('.beam', { top: '0%' }, { top: '100%', ease: 'none', duration: 0.6 }, '<')
-      .to('.beam', { opacity: 0, duration: 0.04 })
+      .fromTo('.scan-grid', { clipPath: 'inset(0% 0% 0% 0%)' }, { clipPath: 'inset(100% 0% 0% 0%)', ease: 'none', duration: 0.6 }, '<')
+      .fromTo('.beam, .scan-read', { top: '0%' }, { top: '100%', ease: 'none', duration: 0.6 }, '<')
+      .fromTo(scanP, { v: 0 }, { v: 100, ease: 'none', duration: 0.6, onUpdate: () => (scanNum.textContent = Math.round(scanP.v)) }, '<')
+      .to('.beam, .scan-read, .scan-grid', { opacity: 0, duration: 0.05 })
       .to({}, { duration: 0.12 });
     if (mob) tl.fromTo('.scan-frame img', { objectPosition: '8% 40%' }, { objectPosition: '92% 40%', ease: 'none', duration: 1 }, 0);
   });
@@ -450,18 +505,49 @@ function initMotion() {
     set(0);
     ScrollTrigger.create({
       trigger: course, start: 'top top', end: 'bottom bottom', scrub: true,
-      onUpdate: (s) => { set(clamp(Math.floor(s.progress * n), 0, n - 1)); chart.line.style.strokeDashoffset = len * (1 - clamp(s.progress * 1.04, 0, 1)); },
+      onUpdate: (s) => { set(clamp(Math.floor(s.progress * n), 0, n - 1)); chart.line.style.strokeDashoffset = len * (1 - clamp(s.progress * 1.04, 0, 1)); syncHead(); },
     });
     requestAnimationFrame(() => ScrollTrigger.refresh());
-    return () => { course.classList.remove('pinned'); steps.forEach((s) => s.classList.remove('on')); chart.dots.forEach((d) => d.classList.add('on')); gsap.set(chart.line, { clearProps: 'strokeDasharray,strokeDashoffset' }); };
+    return () => { chart.head.classList.remove('show'); course.classList.remove('pinned'); steps.forEach((s) => s.classList.remove('on')); chart.dots.forEach((d) => d.classList.add('on')); gsap.set(chart.line, { clearProps: 'strokeDasharray,strokeDashoffset' }); };
   });
   mm.add('(max-width: 899px), (max-height: 699px)', () => {
     const len = chart.line.getTotalLength();
     chart.dots.forEach((d) => d.classList.remove('on'));
-    gsap.fromTo(chart.line, { strokeDasharray: len, strokeDashoffset: len }, { strokeDashoffset: 0, duration: 2.4, ease: 'power2.inOut', scrollTrigger: { trigger: '.cs-chart', start: 'top 85%', once: true, onEnter: () => chart.dots.forEach((d, i) => setTimeout(() => d.classList.add('on'), 250 * i)) } });
+    gsap.fromTo(chart.line, { strokeDasharray: len, strokeDashoffset: len }, { strokeDashoffset: 0, duration: 2.4, ease: 'power2.inOut', onUpdate: syncHead, onComplete: () => chart.head.classList.remove('show'), scrollTrigger: { trigger: '.cs-chart', start: 'top 85%', once: true, onEnter: () => chart.dots.forEach((d, i) => setTimeout(() => d.classList.add('on'), 250 * i)) } });
     gsap.from('#csSteps li', { y: 40, opacity: 0, duration: 1, stagger: 0.08, scrollTrigger: { trigger: '#csSteps', start: 'top 85%', once: true } });
     return () => { chart.dots.forEach((d) => d.classList.add('on')); gsap.set(chart.line, { clearProps: 'strokeDasharray,strokeDashoffset' }); };
   });
+
+  // ── «шторка»: фото раскрываются снизу вверх ──
+  $$('.man-img, .ph-in').forEach((el) => gsap.fromTo(el, { clipPath: 'inset(100% 0% 0% 0%)' }, { clipPath: 'inset(0% 0% 0% 0%)', duration: 1.7, ease: 'expo.inOut', clearProps: 'clipPath', scrollTrigger: { trigger: el, start: 'top 88%', once: true } }));
+
+  // ── скорость скролла слегка «гнёт» фото ──
+  {
+    const sk = $$('.man-img, .ph-in').map((el) => gsap.quickTo(el, 'skewY', { duration: 0.7, ease: 'power3' }));
+    gsap.ticker.add(() => { const v = clamp(lenis.velocity * 0.05, -3, 3); sk.forEach((f) => f(v)); });
+  }
+
+  // ── контурная строка за командой едет вместе со скроллом ──
+  gsap.fromTo('.bgword span', { x: '6%' }, { x: '-46%', ease: 'none', scrollTrigger: { trigger: '.people', start: 'top bottom', end: 'bottom top', scrub: true } });
+
+  // ── подвал: большое слово поднимается ──
+  gsap.fromTo('.foot-word', { yPercent: 38, opacity: 0.15, scale: 0.94 }, { yPercent: 0, opacity: 1, scale: 1, ease: 'none', scrollTrigger: { trigger: '.foot', start: 'top 85%', end: 'bottom bottom', scrub: true } });
+
+  // ── искры при выборе зон и числа процедур ──
+  const sparks = (x, y, n = 11) => {
+    for (let i = 0; i < n; i++) {
+      const s = document.createElement('i'); s.className = 'spark'; document.body.appendChild(s);
+      const a = (i / n) * Math.PI * 2 + Math.random() * 0.6, d = 44 + Math.random() * 56;
+      gsap.fromTo(s, { x, y, scale: 1, opacity: 1 }, { x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, scale: 0, opacity: 0, duration: 0.65 + Math.random() * 0.35, ease: 'power2.out', onComplete: () => s.remove() });
+    }
+  };
+  list.addEventListener('change', (e) => {
+    const cb = e.target.closest('input[data-id]');
+    if (!cb || !cb.checked) return;
+    const r = cb.nextElementSibling.getBoundingClientRect();
+    sparks(r.left + r.width / 2, r.top + r.height / 2);
+  });
+  $$('.course-pick input').forEach((inp) => inp.addEventListener('change', () => { const r = inp.nextElementSibling.getBoundingClientRect(); sparks(r.left + r.width / 2, r.top + r.height / 2, 9); }));
 
   // ── после рендера прайса: новые блоки получают появления, мёртвые триггеры чистим ──
   window.__afterRender = () => {
@@ -500,6 +586,12 @@ function initPointer() {
     dot.style.transform = `translate3d(${tx}px,${ty}px,0)`;
     ring.style.transform = `translate3d(${rx}px,${ry}px,0) scale(${s})`;
     lab.style.transform = `translate3d(${rx}px,${ry}px,0) scale(${ls})`;
+  });
+
+  // круг-«рябь» от клика
+  addEventListener('pointerdown', (e) => {
+    const r = document.createElement('i'); r.className = 'ripple'; document.body.appendChild(r);
+    gsap.fromTo(r, { x: e.clientX, y: e.clientY, scale: 0.2, opacity: 0.8 }, { scale: 1.7, opacity: 0, duration: 0.85, ease: 'power2.out', onComplete: () => r.remove() });
   });
 
   // заливка кнопки растёт из точки входа курсора
